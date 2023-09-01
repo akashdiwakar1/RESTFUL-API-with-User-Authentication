@@ -48,6 +48,11 @@ fake_users_db = {
     }
 }
 
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+init_db()
+
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -69,51 +74,25 @@ class Task(BaseModel):
     project_id: int
     completed: bool
 
-class TaskDB:
-    tasks = []
-
-    @classmethod
-    def create_task(cls, username, description, project_id):
-        task = Task(
-            id=len(cls.tasks) + 1,
-            description=description,
-            project_id=project_id,
-            completed=False
-        )
-        cls.tasks.append(task)
-        return task
-
-    @classmethod
-    def get_tasks_by_user(cls, username):
-        return [task for task in cls.tasks if task.username == username]
-    
-    @classmethod
-    def get_task_by_id(cls, task_id, username):
-        for task in cls.tasks:
-            if task.id == task_id and task.username == username:
-                return task
-        return None
+class TaskUpdate(BaseModel):
+    description: str
+    project_id: int
+    completed: bool
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-app = FastAPI()
-
-
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
-
 def get_password_hash(password):
     return pwd_context.hash(password)
-
 
 def get_user(db, username: str):
     if username in db:
         user_dict = db[username]
         return UserInDB(**user_dict)
-
 
 def authenticate_user(fake_db, username: str, password: str):
     user = get_user(fake_db, username)
@@ -122,7 +101,6 @@ def authenticate_user(fake_db, username: str, password: str):
     if not verify_password(password, user.hashed_password):
         return False
     return user
-
 
 def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None):
     to_encode = data.copy()
@@ -133,7 +111,6 @@ def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
-
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
@@ -154,19 +131,13 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
         raise credentials_exception
     return user
 
-
-async def get_current_active_user(
-    current_user: Annotated[User, Depends(get_current_user)]
-):
+async def get_current_active_user(current_user: Annotated[User, Depends(get_current_user)]):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
-
 @app.post("/token", response_model=Token)
-async def login_for_access_token(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
-):
+async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
     user = authenticate_user(fake_users_db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
@@ -175,24 +146,15 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
+    access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
-
 @app.get("/users/me/", response_model=User)
-async def read_users_me(
-    current_user: Annotated[User, Depends(get_current_active_user)]
-):
+async def read_users_me(current_user: Annotated[User, Depends(get_current_active_user)]):
     return current_user
 
 @app.post("/tasks/")
-async def create_task(
-    task: Task,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
+async def create_task(task: Task, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     db_task = Taskit(
         username=current_user.username,
         description=task.description,
@@ -202,26 +164,36 @@ async def create_task(
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
-    
     return {"message": "Task created successfully", "task": db_task}
 
 @app.get("/tasks/")
-async def get_user_tasks(
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    user_tasks = db.query(Task).filter(Task.username == current_user.username).all()
+async def get_user_tasks(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    user_tasks = db.query(Taskit).filter(Taskit.username == current_user.username).all()
     return user_tasks
 
-
 @app.get("/tasks/{task_id}")
-async def get_task_by_id(
-    task_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
+async def get_task_by_id(task_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     task = db.query(Taskit).filter(Taskit.id == task_id, Taskit.username == current_user.username).first()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
+@app.put("/tasks/{task_id}")
+async def update_task(task_id: int, task: TaskUpdate, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    db_task = db.query(Taskit).filter(Taskit.id == task_id, Taskit.username == current_user.username).first()
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    for field, value in task.dict().items():
+        setattr(db_task, field, value)
+    db.commit()
+    db.refresh(db_task)
+    return db_task
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    db_task = db.query(Taskit).filter(Taskit.id == task_id, Taskit.username == current_user.username).first()
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    db.delete(db_task)
+    db.commit()
+    return {"message": "Task deleted successfully"}

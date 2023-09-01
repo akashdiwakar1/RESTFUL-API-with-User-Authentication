@@ -16,4 +16,11 @@ class Taskit(Base):
     project_id = Column(Integer)
     completed = Column(Boolean)
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    owner = Column(String)
+
 Base.metadata.create_all(bind=engine)
